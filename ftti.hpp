@@ -426,6 +426,7 @@ struct App {
     int active_tabs_id = 0;
     int tab_command_delta = 0;
     int text_focus_id = 0;
+    int active_scroll_id = 0;
     std::vector<int> focus_order;
     std::vector<Cell> cells;
     InputState in;
@@ -888,8 +889,8 @@ static bool parse_escape_sequence(const std::string& buf, size_t& i) {
             a.in.mouse_y = y - 1;
             a.in.mouse_event = true;
             int button = b & ~(4 | 8 | 16);
-            if (button == 64 || button == 66) a.in.wheel = -1;
-            else if (button == 65 || button == 67) a.in.wheel = 1;
+            if (button == 64 || button == 66) a.in.wheel = 1;
+            else if (button == 65 || button == 67) a.in.wheel = -1;
             else if ((b & 32) != 0) {
                 // Hover/motion report.
             } else if (buf[i] == 'M') {
@@ -918,8 +919,8 @@ static bool parse_escape_sequence(const std::string& buf, size_t& i) {
         a.in.mouse_y = y;
         a.in.mouse_event = true;
         int button = b & ~(4 | 8 | 16);
-        if (button == 64 || button == 66) a.in.wheel = -1;
-        else if (button == 65 || button == 67) a.in.wheel = 1;
+        if (button == 64 || button == 66) a.in.wheel = 1;
+        else if (button == 65 || button == 67) a.in.wheel = -1;
         else if ((b & 3) == 3) {
             a.in.mouse_released = true;
             a.mouse_down = false;
@@ -1647,6 +1648,7 @@ bool text_area_ex(const char* label, char* buffer, int buffer_size, int rows, Te
     bool focused = register_focus(id, r);
     if (focused) a.text_focus_id = (int)id;
     bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
+    if (focused || hit) a.active_scroll_id = (int)id;
     bool changed = false;
     if (focused && !disabled() && !(flags & TextAreaFlags::ReadOnly)) {
         int len = (int)std::strlen(buffer);
@@ -1675,7 +1677,7 @@ bool text_area_ex(const char* label, char* buffer, int buffer_size, int rows, Te
     std::vector<std::string> lines = split_lines_simple(buffer);
     ScrollState& ss = scroll_state(id);
     int max_scroll = std::max(0, (int)lines.size() - rows);
-    if (hit && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
+    if ((hit || a.active_scroll_id == (int)id) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
     if (focused && a.in.up) ss.target -= 1.0f;
     if (focused && a.in.down) ss.target += 1.0f;
     ss.target = clamp_f(ss.target, 0.0f, (float)max_scroll);
@@ -1705,9 +1707,10 @@ void log_view(const char* label, const char* text_value, int rows, LogViewFlags 
     ScrollState& ss = scroll_state(id);
     int max_scroll = std::max(0, (int)lines.size() - rows);
     bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
+    if (focused || hit) a.active_scroll_id = (int)id;
     bool manual_scroll = (focused || hit) && (a.in.wheel != 0 || a.in.up || a.in.down);
     if ((flags & LogViewFlags::AutoScrollBottom) && !manual_scroll) ss.target = (float)max_scroll;
-    if ((focused || hit) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
+    if ((focused || hit || a.active_scroll_id == (int)id) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
     if (focused && a.in.up) ss.target -= 1.0f;
     if (focused && a.in.down) ss.target += 1.0f;
     ss.target = clamp_f(ss.target, 0.0f, (float)max_scroll);
@@ -1927,7 +1930,8 @@ bool listbox(const char* label, const char* const* items, int count, int* select
     bool focused = register_focus(id, r);
     bool changed = false;
     bool box_hit = contains(r, a.in.mouse_x, a.in.mouse_y);
-    if (!disabled() && (focused || box_hit)) {
+    if (focused || box_hit) a.active_scroll_id = (int)id;
+    if (!disabled() && (focused || box_hit || a.active_scroll_id == (int)id)) {
         if (a.in.up && *selected > 0) { --*selected; changed = true; }
         if (a.in.down && *selected < count - 1) { ++*selected; changed = true; }
         if (a.in.wheel != 0) {
@@ -2086,7 +2090,8 @@ void scroll_area(const char* label, float height, std::function<void()> fn) {
     bool focused = register_focus(id, r);
     ScrollState& ss = scroll_state(id);
     bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
-    if ((focused || hit) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 2.0f;
+    if (focused || hit) a.active_scroll_id = (int)id;
+    if ((focused || hit || a.active_scroll_id == (int)id) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 2.0f;
     ss.target = std::max(0.0f, ss.target);
     ease_to(ss.current, ss.target, 0.20f);
     draw_box({r.x, r.y, r.w, r.h}, focused ? a.style.accent : a.style.border, a.style.panel);

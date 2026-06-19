@@ -10,6 +10,14 @@ The goal is ncurses-shaped usefulness without an ncurses dependency, using the s
 - No build system required
 - WIP widget set: labels, text, buttons, tabs, inputs, text areas, log views, checkboxes, sliders, dropdowns, listboxes, radio groups, collapsible headers, side menus, modals, tooltips, toasts, progress bars, themes, hover detection, and light animation
 
+## Screenshots
+
+![Dashboard tab](screenshots/showcase-dashboard.png)
+
+![Inputs tab](screenshots/showcase-inputs.png)
+
+![Themes tab](screenshots/showcase-themes.png)
+
 ## Quick Start
 
 ```cpp
