@@ -48,50 +48,72 @@ int main() {
         if (section == 0) {
             ftti::label("Dashboard");
             char line[128];
-            std::snprintf(line, sizeof(line), "Active tab: %s", tabs[tab]);
-            ftti::text(line);
-            std::snprintf(line, sizeof(line), "Actions: %d", actions);
-            ftti::text(line);
-            ftti::separator();
-            if (ftti::button("Primary action", ftti::ColorRole::Accent)) ++actions;
-            ftti::tooltip("Enter or click activates a focused button.");
-            if (ftti::button("Warning action", ftti::ColorRole::Warning)) ++actions;
-            if (ftti::button("Success action", ftti::ColorRole::Success)) ++actions;
-            ftti::progress_bar(progress, "Progress");
-            ftti::slider_float("Progress", &progress, 0.0f, 1.0f);
-            ftti::checkbox("Safe mode", &safe_mode);
-            if (ftti::button("Toast")) ftti::toast_success("Action completed");
-            if (ftti::button("Open modal")) ftti::open_modal("Confirm action");
-            ftti::modal("Confirm action", [&]() {
-                ftti::text_wrapped("This is a terminal modal. Escape or Close dismisses it.");
-                if (ftti::button("Close")) ftti::close_modal();
-            });
+            if (tab == 0) {
+                ftti::text("Live controls");
+                std::snprintf(line, sizeof(line), "Actions: %d", actions);
+                ftti::text(line);
+                ftti::separator();
+                if (ftti::button("Primary action", ftti::ColorRole::Accent)) ++actions;
+                ftti::tooltip("Enter or click activates a focused button.");
+                if (ftti::button("Warning action", ftti::ColorRole::Warning)) ++actions;
+                if (ftti::button("Success action", ftti::ColorRole::Success)) ++actions;
+                ftti::progress_bar(progress, "Progress");
+                ftti::slider_float("Progress", &progress, 0.0f, 1.0f);
+            } else if (tab == 1) {
+                ftti::text("Queue");
+                ftti::text_wrapped("This tab intentionally renders different content so tab switching is visible.");
+                ftti::log_view("Queue log", logs, 8, ftti::LogViewFlags::WordWrap);
+                if (ftti::button("Append queue event")) {
+                    ++actions;
+                    ftti::toast_info("Queued event appended");
+                }
+            } else {
+                ftti::text("Dashboard settings");
+                ftti::checkbox("Safe mode", &safe_mode);
+                if (ftti::button("Toast")) ftti::toast_success("Action completed");
+                if (ftti::button("Open modal")) ftti::open_modal("Confirm action");
+                ftti::modal("Confirm action", [&]() {
+                    ftti::text_wrapped("This is a terminal modal. Escape or Close dismisses it.");
+                    if (ftti::button("Close")) ftti::close_modal();
+                });
+            }
         } else if (section == 1) {
-            ftti::input("Username", username, sizeof(username));
-            ftti::input("Password", password, sizeof(password), ftti::InputFlags::Password);
-            ftti::input("Port", port, sizeof(port), ftti::InputFlags::CharsDecimal);
-            ftti::input("Note", note, sizeof(note), ftti::InputFlags::Default, &submitted);
-            if (submitted) ++actions;
-            if (ftti::button("Submit form")) ++actions;
-            ftti::dropdown("Environment", modes, 3, &mode);
-            ftti::listbox("Profile", profiles, 4, &profile, 4);
-            ftti::radio_group("Shell", shells, 3, &shell);
-            if (ftti::collapsing_header("Editor", &advanced_open)) {
-                ftti::text_area_ex("Notes", editor, sizeof(editor), 5, ftti::TextAreaFlags::WordWrap);
-                ftti::log_view("Output", logs, 5, ftti::LogViewFlags::WordWrap);
+            if (tab == 0) {
+                ftti::input("Username", username, sizeof(username));
+                ftti::input("Password", password, sizeof(password), ftti::InputFlags::Password);
+                ftti::input("Port", port, sizeof(port), ftti::InputFlags::CharsDecimal);
+                ftti::input("Note", note, sizeof(note), ftti::InputFlags::Default, &submitted);
+                if (submitted) ++actions;
+                if (ftti::button("Submit form")) ++actions;
+            } else if (tab == 1) {
+                ftti::dropdown("Environment", modes, 3, &mode);
+                ftti::listbox("Profile", profiles, 4, &profile, 4);
+                ftti::radio_group("Shell", shells, 3, &shell);
+            } else {
+                if (ftti::collapsing_header("Editor", &advanced_open)) {
+                    ftti::text_area_ex("Notes", editor, sizeof(editor), 5, ftti::TextAreaFlags::WordWrap);
+                    ftti::log_view("Output", logs, 5, ftti::LogViewFlags::WordWrap);
+                }
             }
         } else {
-            ftti::text("Theme selector");
-            ftti::tabs(theme_names, 5, &theme);
-            if (theme == 0) ftti::set_style(ftti::default_dark_style());
-            if (theme == 1) ftti::set_style(ftti::light_style());
-            if (theme == 2) ftti::set_style(ftti::terminal_green_style());
-            if (theme == 3) ftti::set_style(ftti::midnight_style());
-            if (theme == 4) ftti::set_style(ftti::amber_style());
-            ftti::text_wrapped("Themes are semantic color packs. Widgets resolve roles like Button, Accent, Warning, Success, and InputFocus.");
-            ftti::push_color(ftti::ColorRole::Button, ftti::color_from_hex("#7c3aed"));
-            if (ftti::button("Scoped purple button")) ++actions;
-            ftti::pop_color();
+            if (tab == 0) {
+                ftti::text("Theme selector");
+                ftti::tabs(theme_names, 5, &theme);
+                if (theme == 0) ftti::set_style(ftti::default_dark_style());
+                if (theme == 1) ftti::set_style(ftti::light_style());
+                if (theme == 2) ftti::set_style(ftti::terminal_green_style());
+                if (theme == 3) ftti::set_style(ftti::midnight_style());
+                if (theme == 4) ftti::set_style(ftti::amber_style());
+            } else if (tab == 1) {
+                ftti::text_wrapped("Themes are semantic color packs. Widgets resolve roles like Button, Accent, Warning, Success, and InputFocus.");
+                ftti::push_color(ftti::ColorRole::Button, ftti::color_from_hex("#7c3aed"));
+                if (ftti::button("Scoped purple button")) ++actions;
+                ftti::pop_color();
+            } else {
+                ftti::text_wrapped("Unsupported FTUI visual effects are accepted as no-ops so swapped code can keep compiling.");
+                if (ftti::button("Set blur no-op")) ftti::set_backdrop_effect(ftti::BackdropEffect::Blur);
+                if (ftti::button("Set dither no-op")) ftti::set_backdrop_effect(ftti::BackdropEffect::BayerDither);
+            }
         }
 
         ftti::end();

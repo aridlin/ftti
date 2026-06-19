@@ -33,25 +33,50 @@ int main() {
         ftti::tabs(tabs, 3, &tab);
 
         if (section == 0) {
-            ftti::label("Status");
-            ftti::text_wrapped("Buttons, tabs, side menus, labels, text inputs, themes, and light focus animation are in the WIP surface.");
-            if (ftti::button("Increment counter", ftti::ColorRole::Accent)) {
-                ++clicks;
+            if (tab == 0) {
+                ftti::label("Run");
+                ftti::text_wrapped("This tab owns the primary action surface.");
+                if (ftti::button("Increment counter", ftti::ColorRole::Accent)) {
+                    ++clicks;
+                }
+                char line[96];
+                std::snprintf(line, sizeof(line), "Counter: %d", clicks);
+                ftti::text(line);
+            } else if (tab == 1) {
+                ftti::label("Inspect");
+                ftti::text_wrapped("Tabs are immediate-mode state. Switching tabs changes which branch the app renders.");
+                char line[96];
+                std::snprintf(line, sizeof(line), "Current section: %s", sections[section]);
+                ftti::text(line);
+            } else {
+                ftti::label("Settings");
+                ftti::text_wrapped("Use the side menu for major app areas and tabs for local views inside the current area.");
+                ftti::checkbox("Demo toggle", &submitted);
             }
-            char line[96];
-            std::snprintf(line, sizeof(line), "Counter: %d", clicks);
-            ftti::text(line);
         } else if (section == 1) {
-            ftti::input("Name", name, sizeof(name));
-            ftti::input("Command", command, sizeof(command), ftti::InputFlags::Default, &submitted);
-            if (submitted) ++clicks;
-            if (ftti::button("Submit")) ++clicks;
-            ftti::text_wrapped("Use Tab and Shift+Tab to move focus. Enter activates focused buttons and submits focused inputs.");
+            if (tab == 0) {
+                ftti::input("Name", name, sizeof(name));
+                ftti::input("Command", command, sizeof(command), ftti::InputFlags::Default, &submitted);
+                if (submitted) ++clicks;
+                if (ftti::button("Submit")) ++clicks;
+            } else if (tab == 1) {
+                ftti::text("Input preview");
+                ftti::text(name);
+                ftti::text(command);
+            } else {
+                ftti::text_wrapped("Use Tab and Shift+Tab to move focus. Enter activates focused buttons and submits focused inputs.");
+                ftti::text_wrapped("Spaces are accepted inside focused text inputs.");
+            }
         } else {
-            if (ftti::button("Default dark")) ftti::set_style(ftti::default_dark_style());
-            if (ftti::button("Light")) ftti::set_style(ftti::light_style());
-            if (ftti::button("Terminal green")) ftti::set_style(ftti::terminal_green_style());
-            if (ftti::button("Amber")) ftti::set_style(ftti::amber_style());
+            if (tab == 0) {
+                if (ftti::button("Default dark")) ftti::set_style(ftti::default_dark_style());
+                if (ftti::button("Light")) ftti::set_style(ftti::light_style());
+            } else if (tab == 1) {
+                if (ftti::button("Terminal green")) ftti::set_style(ftti::terminal_green_style());
+                if (ftti::button("Amber")) ftti::set_style(ftti::amber_style());
+            } else {
+                ftti::text_wrapped("Theme changes apply immediately and reuse the same widget calls.");
+            }
         }
 
         ftti::end();

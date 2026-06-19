@@ -116,6 +116,14 @@ const char* tabs[] = {"Run", "Logs", "Settings"};
 int tab = 0;
 ftti::tabs(tabs, 3, &tab);
 
+if (tab == 0) {
+    ftti::text("Run panel");
+} else if (tab == 1) {
+    ftti::text("Logs panel");
+} else {
+    ftti::text("Settings panel");
+}
+
 const char* envs[] = {"Local", "Staging", "Production"};
 int env = 0;
 ftti::dropdown("Environment", envs, 3, &env);
@@ -158,13 +166,36 @@ ftti::set_style(ftti::ghostty_green_style());
 - Arrow keys: navigate focused tabs, side menus, sliders, listboxes, radio groups, and logs
 - `Ctrl+Q`: quit by default
 - Mouse click, hover, and wheel support are enabled on ANSI terminals that report SGR mouse events
+- Sliders only change from keyboard arrows or mouse press/drag on the slider rail; hover only lights them up
 
-Tooltips attach to the last item and float near the focused or hovered widget:
+Tooltips attach to the last item and float near the focused or hovered widget after a short steady-hover delay:
 
 ```cpp
 ftti::button("Run");
 ftti::tooltip("Runs the selected task.");
 ```
+
+Vim-style commands:
+
+- `:` opens the command line
+- `Esc` cancels it
+- `Enter` runs it
+- `q`, `quit`: quit
+- `theme dark`, `theme light`, `theme green`, `theme amber`: switch themes
+- `tab next`, `tab prev`: move the active tab bar
+- `help`: show command help
+
+## Kitty Images
+
+`load_image()` / `image()` emit Kitty graphics protocol local-file commands when possible and draw a terminal placeholder frame as a fallback:
+
+```cpp
+ftti::ImageHandle* img = ftti::load_image("screenshot.png");
+ftti::image(img, 32, 10);
+ftti::free_image(img);
+```
+
+This uses Kitty's local-file transmission path, so the terminal must be able to read the image path.
 
 ## Build Targets
 

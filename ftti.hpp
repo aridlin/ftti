@@ -363,6 +363,7 @@ struct InputState {
     bool mouse_pressed = false;
     bool mouse_released = false;
     bool mouse_event = false;
+    bool mouse_down = false;
     int wheel = 0;
     int mouse_x = -1;
     int mouse_y = -1;
@@ -410,12 +411,19 @@ struct App {
     int focused = 0;
     int hovered = 0;
     int active = 0;
+    bool mouse_down = false;
     int disabled_depth = 0;
     int request_focus_id = 0;
     int modal_id = 0;
     bool close_modal_requested = false;
     Rect last_item_rect;
     unsigned last_item_id = 0;
+    bool command_mode = false;
+    std::string command_buffer;
+    std::string command_message;
+    int active_tabs_id = 0;
+    int tab_command_delta = 0;
+    int text_focus_id = 0;
     std::vector<int> focus_order;
     std::vector<Cell> cells;
     InputState in;
@@ -648,6 +656,19 @@ static void draw_toasts() {
     }
 }
 
+static void draw_command_line() {
+    App& a = app();
+    if (a.height < 3) return;
+    Rect r{0, a.height - 1, a.width, 1};
+    Color bg = a.command_mode ? a.style.panel_alt : a.style.background;
+    fill_rect(r, bg);
+    if (a.command_mode) {
+        draw_text(0, a.height - 1, ":" + a.command_buffer, a.style.accent, bg, true, a.width);
+    } else if (!a.command_message.empty()) {
+        draw_text(0, a.height - 1, a.command_message, a.style.text_dim, bg, false, a.width);
+    }
+}
+
 static Motion& motion(unsigned id) {
     App& a = app();
     for (Motion& m : a.motions) {
@@ -715,6 +736,68 @@ static bool disabled() {
     return app().disabled_depth > 0;
 }
 
+static void execute_command(const std::string& raw) {
+    App& a = app();
+    std::string cmd = raw;
+    while (!cmd.empty() && std::isspace((unsigned char)cmd.front())) cmd.erase(cmd.begin());
+    while (!cmd.empty() && std::isspace((unsigned char)cmd.back())) cmd.pop_back();
+    if (cmd == "q" || cmd == "quit" || cmd == "exit") {
+        a.running = false;
+        return;
+    }
+    if (cmd == "tab next" || cmd == "tn") {
+        a.tab_command_delta = 1;
+        a.command_message = "tab next";
+        return;
+    }
+    if (cmd == "tab prev" || cmd == "tp" || cmd == "tab previous") {
+        a.tab_command_delta = -1;
+        a.command_message = "tab prev";
+        return;
+    }
+    if (cmd == "theme dark") {
+        a.style = default_dark_style();
+        a.command_message = "theme dark";
+        return;
+    }
+    if (cmd == "theme light") {
+        a.style = light_style();
+        a.command_message = "theme light";
+        return;
+    }
+    if (cmd == "theme green") {
+        a.style = terminal_green_style();
+        a.command_message = "theme green";
+        return;
+    }
+    if (cmd == "theme amber") {
+        a.style = amber_style();
+        a.command_message = "theme amber";
+        return;
+    }
+    if (cmd == "help" || cmd == "?") {
+        a.command_message = "commands: q, theme dark/light/green/amber, tab next, tab prev";
+        return;
+    }
+    a.command_message = cmd.empty() ? "" : "not a command: " + cmd;
+}
+
+static void consume_widget_input() {
+    App& a = app();
+    a.in.enter = false;
+    a.in.space = false;
+    a.in.backspace = false;
+    a.in.tab = false;
+    a.in.shift_tab = false;
+    a.in.left = false;
+    a.in.right = false;
+    a.in.up = false;
+    a.in.down = false;
+    a.in.escape = false;
+    a.in.text_count = 0;
+    a.in.text[0] = '\0';
+}
+
 static void focus_delta(int delta) {
     App& a = app();
     if (a.focus_order.empty()) return;
@@ -731,6 +814,7 @@ static void reset_input() {
     a.in = InputState{};
     a.in.mouse_x = x;
     a.in.mouse_y = y;
+    a.in.mouse_down = a.mouse_down;
 }
 
 static void push_text_char(char ch) {
@@ -806,13 +890,43 @@ static bool parse_escape_sequence(const std::string& buf, size_t& i) {
             else if (b == 67) a.in.wheel = 1;
             else if ((b & 32) != 0) {
                 // Hover/motion report.
-            } else if (buf[i] == 'M') a.in.mouse_pressed = true;
-            else a.in.mouse_released = true;
+            } else if (buf[i] == 'M') {
+                a.in.mouse_pressed = true;
+                a.mouse_down = true;
+                a.in.mouse_down = true;
+            } else {
+                a.in.mouse_released = true;
+                a.mouse_down = false;
+                a.in.mouse_down = false;
+            }
             ++i;
             return true;
         }
         i = start + 1;
         a.in.escape = true;
+        return true;
+    }
+    if (buf[i] == 'M') {
+        size_t start = i - 2;
+        if (i + 3 >= buf.size()) { i = start; return false; }
+        int b = (unsigned char)buf[i + 1] - 32;
+        int x = (unsigned char)buf[i + 2] - 33;
+        int y = (unsigned char)buf[i + 3] - 33;
+        a.in.mouse_x = x;
+        a.in.mouse_y = y;
+        a.in.mouse_event = true;
+        if (b == 64) a.in.wheel = -1;
+        else if (b == 65) a.in.wheel = 1;
+        else if ((b & 3) == 3) {
+            a.in.mouse_released = true;
+            a.mouse_down = false;
+            a.in.mouse_down = false;
+        } else {
+            a.in.mouse_pressed = true;
+            a.mouse_down = true;
+            a.in.mouse_down = true;
+        }
+        i += 4;
         return true;
     }
     char final = 0;
@@ -1207,6 +1321,26 @@ bool pump() {
 
     reset_input();
     read_input();
+    if (a.command_mode) {
+        if (a.in.escape) {
+            a.command_mode = false;
+            a.command_buffer.clear();
+        } else if (a.in.backspace && !a.command_buffer.empty()) {
+            a.command_buffer.pop_back();
+        } else {
+            for (int i = 0; i < a.in.text_count; ++i) a.command_buffer.push_back(a.in.text[i]);
+            if (a.in.enter) {
+                execute_command(a.command_buffer);
+                a.command_buffer.clear();
+                a.command_mode = false;
+            }
+        }
+        consume_widget_input();
+    } else if (a.in.text_count == 1 && a.in.text[0] == ':' && a.focused != a.text_focus_id) {
+        a.command_mode = true;
+        a.command_buffer.clear();
+        consume_widget_input();
+    }
     if (a.cfg.quit_on_ctrl_q && a.in.ctrl_q) {
         a.running = false;
         return false;
@@ -1248,6 +1382,7 @@ void end() {
     if (!a.focused && !a.focus_order.empty()) a.focused = a.focus_order.front();
     draw_toasts();
     draw_tooltip_box();
+    draw_command_line();
 
     std::string out;
     out.reserve((size_t)a.width * (size_t)a.height * 16);
@@ -1439,6 +1574,7 @@ bool input(const char* label, char* buffer, int buffer_size, InputFlags flags, b
     Rect r{a.content_x, a.cursor_y + 1, consume_width(a.content_w), 3};
     draw_text(a.content_x, a.cursor_y, name, a.style.text_dim, a.style.background, false, a.content_w);
     bool focused = register_focus(id, r);
+    if (focused) a.text_focus_id = (int)id;
     bool changed = false;
     if (focused && !disabled() && !(flags & InputFlags::ReadOnly)) {
         int len = (int)std::strlen(buffer);
@@ -1506,6 +1642,7 @@ bool text_area_ex(const char* label, char* buffer, int buffer_size, int rows, Te
     draw_text(a.content_x, a.cursor_y, name, a.style.text_dim, a.style.background, false, a.content_w);
     Rect r{a.content_x, a.cursor_y + 1, consume_width(a.content_w), rows + 2};
     bool focused = register_focus(id, r);
+    if (focused) a.text_focus_id = (int)id;
     bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
     bool changed = false;
     if (focused && !disabled() && !(flags & TextAreaFlags::ReadOnly)) {
@@ -1564,8 +1701,9 @@ void log_view(const char* label, const char* text_value, int rows, LogViewFlags 
     std::vector<std::string> lines = split_lines_simple(text_value);
     ScrollState& ss = scroll_state(id);
     int max_scroll = std::max(0, (int)lines.size() - rows);
-    if (flags & LogViewFlags::AutoScrollBottom) ss.target = (float)max_scroll;
     bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
+    bool manual_scroll = (focused || hit) && (a.in.wheel != 0 || a.in.up || a.in.down);
+    if ((flags & LogViewFlags::AutoScrollBottom) && !manual_scroll) ss.target = (float)max_scroll;
     if ((focused || hit) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
     if (focused && a.in.up) ss.target -= 1.0f;
     if (focused && a.in.down) ss.target += 1.0f;
@@ -1626,7 +1764,7 @@ bool slider_float(const char* label, float* value, float min_v, float max_v) {
     }
     int bar_w = std::max(8, r.w - (int)name.size() - 12);
     int bx = r.x + (int)name.size() + 2;
-    if (!disabled() && hit && (a.in.mouse_pressed || a.in.mouse_released || a.in.mouse_event)) {
+    if (!disabled() && hit && (a.in.mouse_pressed || a.mouse_down)) {
         a.focused = (int)id;
         float t_mouse = bar_w <= 1 ? 0.0f : (float)(a.in.mouse_x - bx) / (float)(bar_w - 1);
         *value = min_v + clamp_f(t_mouse, 0.0f, 1.0f) * (max_v - min_v);
@@ -1634,14 +1772,16 @@ bool slider_float(const char* label, float* value, float min_v, float max_v) {
     *value = clamp_f(*value, min_v, max_v);
     bool changed = std::abs(*value - old) > 0.0001f;
     float t = max_v == min_v ? 0.0f : (*value - min_v) / (max_v - min_v);
-    int fill = clamp_i((int)std::round(t * bar_w), 0, bar_w);
+    int handle = clamp_i((int)std::round(t * (bar_w - 1)), 0, std::max(0, bar_w - 1));
     char val[32];
     std::snprintf(val, sizeof(val), " %.2f", *value);
     Color label_color = hit ? a.style.text : a.style.text_dim;
     draw_text(r.x, r.y, name, label_color, a.style.background, focused || hit, r.w);
     for (int i = 0; i < bar_w; ++i) {
         Color rail = hit ? lerp(a.style.border, a.style.accent, 0.35f) : a.style.border;
-        put(bx + i, r.y, i < fill ? '=' : '-', i < fill ? a.style.accent : rail, a.style.background, focused || hit);
+        char ch = i == handle ? 'O' : (i < handle ? '<' : '-');
+        Color fg = i == handle ? a.style.accent : rail;
+        put(bx + i, r.y, ch, fg, a.style.background, focused || hit);
     }
     draw_text(bx + bar_w + 1, r.y, val, a.style.text, a.style.background, false, r.w - bar_w - 1);
     a.cursor_y += 2;
@@ -1658,10 +1798,18 @@ bool tabs(const char* const* labels, int count, int* selected) {
     id ^= (unsigned)(a.cursor_x * 131 + a.cursor_y * 313);
     Rect r{a.content_x, a.cursor_y, a.content_w, 3};
     bool focused = register_focus(id, r);
+    bool bar_hit = contains(r, a.in.mouse_x, a.in.mouse_y);
+    if (focused || bar_hit) a.active_tabs_id = (int)id;
     TabState& ts = tab_state(id, *selected);
     ts.target = (float)*selected;
     ease_to(ts.current, ts.target, 0.24f);
     bool changed = false;
+    if (!disabled() && a.tab_command_delta != 0 && a.active_tabs_id == (int)id) {
+        int next = clamp_i(*selected + a.tab_command_delta, 0, count - 1);
+        changed = changed || next != *selected;
+        *selected = next;
+        a.tab_command_delta = 0;
+    }
     if (!disabled() && focused && a.in.left && *selected > 0) {
         --*selected;
         changed = true;
@@ -1676,21 +1824,13 @@ bool tabs(const char* const* labels, int count, int* selected) {
     }
 
     int x = r.x;
-    int active_x = r.x;
-    int active_w = 0;
-    int prev_x = r.x;
-    int prev_w = 0;
+    std::vector<int> tab_xs;
+    std::vector<int> tab_ws;
     for (int i = 0; i < count; ++i) {
         std::string name = visible_label(labels[i]);
         int w = (int)name.size() + 4;
-        if (i <= (int)std::floor(ts.current)) {
-            prev_x = x;
-            prev_w = w;
-        }
-        if (i == *selected) {
-            active_x = x;
-            active_w = w;
-        }
+        tab_xs.push_back(x);
+        tab_ws.push_back(w);
         Rect tr{x, r.y, w, 3};
         bool hit = contains(tr, a.in.mouse_x, a.in.mouse_y);
         if (!disabled() && hit && (a.in.mouse_pressed || a.in.mouse_released) && *selected != i) {
@@ -1706,12 +1846,15 @@ bool tabs(const char* const* labels, int count, int* selected) {
         x += w + 1;
         if (x >= r.x + r.w) break;
     }
-    float frac = ts.current - std::floor(ts.current);
-    int underline_x = active_x;
-    int underline_w = active_w;
-    if (active_w > 0 && prev_w > 0 && std::abs(ts.current - ts.target) > 0.01f) {
-        underline_x = (int)std::round(prev_x + (active_x - prev_x) * frac);
-        underline_w = (int)std::round(prev_w + (active_w - prev_w) * frac);
+    int underline_x = r.x;
+    int underline_w = 0;
+    if (!tab_xs.empty()) {
+        float cur = clamp_f(ts.current, 0.0f, (float)tab_xs.size() - 1.0f);
+        int lo = clamp_i((int)std::floor(cur), 0, (int)tab_xs.size() - 1);
+        int hi = clamp_i((int)std::ceil(cur), 0, (int)tab_xs.size() - 1);
+        float frac = cur - (float)lo;
+        underline_x = (int)std::round((float)tab_xs[(size_t)lo] + ((float)tab_xs[(size_t)hi] - (float)tab_xs[(size_t)lo]) * frac);
+        underline_w = (int)std::round((float)tab_ws[(size_t)lo] + ((float)tab_ws[(size_t)hi] - (float)tab_ws[(size_t)lo]) * frac);
     }
     if (underline_w > 2) draw_hline(underline_x + 1, r.y + 2, underline_w - 2, '=', a.style.accent, a.style.background);
     if (focused) put(r.x, r.y + 1, '>', a.style.accent, a.style.background, true);
@@ -1780,7 +1923,8 @@ bool listbox(const char* label, const char* const* items, int count, int* select
     Rect r{a.content_x, a.cursor_y + 1, consume_width(a.content_w), visible_rows + 2};
     bool focused = register_focus(id, r);
     bool changed = false;
-    if (!disabled() && focused) {
+    bool box_hit = contains(r, a.in.mouse_x, a.in.mouse_y);
+    if (!disabled() && (focused || box_hit)) {
         if (a.in.up && *selected > 0) { --*selected; changed = true; }
         if (a.in.down && *selected < count - 1) { ++*selected; changed = true; }
         if (a.in.wheel != 0) {
