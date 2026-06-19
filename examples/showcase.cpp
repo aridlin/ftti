@@ -2,6 +2,7 @@
 #include "../ftti.hpp"
 
 #include <cstdio>
+#include <string>
 
 int main() {
     ftti::Config cfg;
@@ -15,7 +16,20 @@ int main() {
     char port[16] = "8080";
     char note[128] = "";
     char editor[512] = "Type here.\nEnter adds a line.";
-    char logs[1024] = "[00:00] FTTI started\n[00:01] Terminal backend online\n[00:02] Waiting for input";
+    std::string logs =
+        "[00:00] FTTI started\n"
+        "[00:01] Terminal backend online\n"
+        "[00:02] Waiting for input\n"
+        "[00:03] Mouse reporting enabled\n"
+        "[00:04] Wheel events mapped\n"
+        "[00:05] Scroll easing active\n"
+        "[00:06] Hover state active\n"
+        "[00:07] Tooltip delay armed\n"
+        "[00:08] Queue idle\n"
+        "[00:09] Operator ready\n"
+        "[00:10] Long enough to scroll\n"
+        "[00:11] Keep wheeling\n"
+        "[00:12] End of sample";
 
     int section = 0;
     int tab = 0;
@@ -62,11 +76,21 @@ int main() {
             } else if (tab == 1) {
                 ftti::text("Queue");
                 ftti::text_wrapped("This tab intentionally renders different content so tab switching is visible.");
-                ftti::log_view("Queue log", logs, 8, ftti::LogViewFlags::WordWrap);
+                ftti::log_view("Queue log", logs.c_str(), 8, ftti::LogViewFlags::WordWrap);
                 if (ftti::button("Append queue event")) {
                     ++actions;
+                    char extra[64];
+                    std::snprintf(extra, sizeof(extra), "\n[%02d] Queued event appended", actions);
+                    logs += extra;
                     ftti::toast_info("Queued event appended");
                 }
+                ftti::scroll_area("Scrollable rows", 8, [&]() {
+                    for (int i = 0; i < 24; ++i) {
+                        char row[64];
+                        std::snprintf(row, sizeof(row), "row %02d - wheel over this panel", i + 1);
+                        ftti::text(row);
+                    }
+                });
             } else {
                 ftti::text("Dashboard settings");
                 ftti::checkbox("Safe mode", &safe_mode);
@@ -92,7 +116,7 @@ int main() {
             } else {
                 if (ftti::collapsing_header("Editor", &advanced_open)) {
                     ftti::text_area_ex("Notes", editor, sizeof(editor), 5, ftti::TextAreaFlags::WordWrap);
-                    ftti::log_view("Output", logs, 5, ftti::LogViewFlags::WordWrap);
+                    ftti::log_view("Output", logs.c_str(), 5, ftti::LogViewFlags::WordWrap);
                 }
             }
         } else {

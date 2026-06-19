@@ -408,6 +408,8 @@ struct App {
     int cursor_y = 2;
     int content_x = 2;
     int content_w = 76;
+    bool clip_active = false;
+    Rect clip_rect;
     int focused = 0;
     int hovered = 0;
     int active = 0;
@@ -554,6 +556,7 @@ static void resize_canvas() {
 static void put(int x, int y, char ch, Color fg, Color bg, bool bold = false) {
     App& a = app();
     if (x < 0 || y < 0 || x >= a.width || y >= a.height) return;
+    if (a.clip_active && !contains(a.clip_rect, x, y)) return;
     Cell& c = a.cells[(size_t)y * (size_t)a.width + (size_t)x];
     c.ch = ch;
     c.fg = fg;
@@ -884,10 +887,9 @@ static bool parse_escape_sequence(const std::string& buf, size_t& i) {
             a.in.mouse_x = x - 1;
             a.in.mouse_y = y - 1;
             a.in.mouse_event = true;
-            if (b == 64) a.in.wheel = -1;
-            else if (b == 65) a.in.wheel = 1;
-            else if (b == 66) a.in.wheel = -1;
-            else if (b == 67) a.in.wheel = 1;
+            int button = b & ~(4 | 8 | 16);
+            if (button == 64 || button == 66) a.in.wheel = -1;
+            else if (button == 65 || button == 67) a.in.wheel = 1;
             else if ((b & 32) != 0) {
                 // Hover/motion report.
             } else if (buf[i] == 'M') {
@@ -915,8 +917,9 @@ static bool parse_escape_sequence(const std::string& buf, size_t& i) {
         a.in.mouse_x = x;
         a.in.mouse_y = y;
         a.in.mouse_event = true;
-        if (b == 64) a.in.wheel = -1;
-        else if (b == 65) a.in.wheel = 1;
+        int button = b & ~(4 | 8 | 16);
+        if (button == 64 || button == 66) a.in.wheel = -1;
+        else if (button == 65 || button == 67) a.in.wheel = 1;
         else if ((b & 3) == 3) {
             a.in.mouse_released = true;
             a.mouse_down = false;
@@ -2090,10 +2093,16 @@ void scroll_area(const char* label, float height, std::function<void()> fn) {
     int old_x = a.content_x;
     int old_y = a.cursor_y;
     int old_w = a.content_w;
+    bool old_clip_active = a.clip_active;
+    Rect old_clip = a.clip_rect;
     a.content_x = r.x + 2;
     a.cursor_y = r.y + 1 - (int)std::round(ss.current);
     a.content_w = std::max(4, r.w - 4);
+    a.clip_active = true;
+    a.clip_rect = {r.x + 1, r.y + 1, std::max(0, r.w - 2), std::max(0, r.h - 2)};
     if (fn) fn();
+    a.clip_active = old_clip_active;
+    a.clip_rect = old_clip;
     int used = a.cursor_y + (int)std::round(ss.current) - (r.y + 1);
     ss.target = clamp_f(ss.target, 0.0f, (float)std::max(0, used - (r.h - 2)));
     a.content_x = old_x;
