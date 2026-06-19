@@ -362,6 +362,7 @@ struct InputState {
     bool escape = false;
     bool mouse_pressed = false;
     bool mouse_released = false;
+    bool mouse_event = false;
     int wheel = 0;
     int mouse_x = -1;
     int mouse_y = -1;
@@ -377,6 +378,12 @@ struct Motion {
 };
 
 struct ScrollState {
+    unsigned id = 0;
+    float current = 0.0f;
+    float target = 0.0f;
+};
+
+struct TabState {
     unsigned id = 0;
     float current = 0.0f;
     float target = 0.0f;
@@ -412,13 +419,21 @@ struct App {
     std::vector<int> focus_order;
     std::vector<Cell> cells;
     InputState in;
+    std::string input_pending;
     std::vector<Motion> motions;
     std::vector<ScrollState> scrolls;
+    std::vector<TabState> tabs;
     std::vector<ToastState> toasts;
+    std::vector<std::string> graphics_commands;
     std::vector<std::pair<ColorRole, Color>> color_stack;
     std::string pending_tooltip;
     Rect pending_tooltip_anchor;
     unsigned pending_tooltip_owner = 0;
+    unsigned tooltip_owner = 0;
+    int tooltip_early_hides = 0;
+    bool tooltip_visible_last_frame = false;
+    std::chrono::steady_clock::time_point tooltip_owner_since;
+    std::chrono::steady_clock::time_point tooltip_visible_since;
     DebugState dbg;
     bool next_color_active = false;
     ColorRole next_color_role = ColorRole::Button;
@@ -577,6 +592,28 @@ static void draw_box(Rect r, Color fg, Color bg) {
 static void draw_tooltip_box() {
     App& a = app();
     if (a.pending_tooltip.empty()) return;
+    auto now = std::chrono::steady_clock::now();
+    if (a.pending_tooltip_owner != a.tooltip_owner) {
+        if (a.tooltip_visible_last_frame) {
+            int visible_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - a.tooltip_visible_since).count();
+            if (visible_ms < 550) a.tooltip_early_hides = std::min(3, a.tooltip_early_hides + 1);
+            else if (a.tooltip_early_hides > 0) --a.tooltip_early_hides;
+        }
+        a.tooltip_owner = a.pending_tooltip_owner;
+        a.tooltip_owner_since = now;
+        a.tooltip_visible_last_frame = false;
+        return;
+    }
+    int delay_ms = 650 + a.tooltip_early_hides * 300;
+    int stable_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - a.tooltip_owner_since).count();
+    if (stable_ms < delay_ms) {
+        a.tooltip_visible_last_frame = false;
+        return;
+    }
+    if (!a.tooltip_visible_last_frame) {
+        a.tooltip_visible_since = now;
+        a.tooltip_visible_last_frame = true;
+    }
     int w = std::min((int)a.pending_tooltip.size() + 4, std::max(12, a.width - 4));
     int x = a.pending_tooltip_anchor.x;
     int y = a.pending_tooltip_anchor.y + a.pending_tooltip_anchor.h;
@@ -629,10 +666,29 @@ static ScrollState& scroll_state(unsigned id) {
     return a.scrolls.back();
 }
 
+static TabState& tab_state(unsigned id, int selected) {
+    App& a = app();
+    for (TabState& t : a.tabs) {
+        if (t.id == id) return t;
+    }
+    a.tabs.push_back(TabState{id, (float)selected, (float)selected});
+    return a.tabs.back();
+}
+
 static void animate_to(float& value, float target) {
     float speed = app().cfg.animate ? 0.28f : 1.0f;
     value += (target - value) * speed;
     if (std::abs(value - target) < 0.01f) value = target;
+}
+
+static void ease_to(float& value, float target, float speed = 0.18f) {
+    if (!app().cfg.animate) {
+        value = target;
+        return;
+    }
+    float d = target - value;
+    value += d * speed;
+    if (std::abs(d) < 0.03f) value = target;
 }
 
 static bool register_focus(unsigned id, Rect r) {
@@ -703,44 +759,65 @@ static void read_input() {
         else if (c == 13) a.in.enter = true;
         else if (c == 27) a.in.escape = true;
         else if (c == 8) a.in.backspace = true;
-        else if (c == ' ') a.in.space = true;
+        else if (c == ' ') {
+            a.in.space = true;
+            push_text_char(' ');
+        }
         else if (c >= 32 && c < 127) push_text_char((char)c);
     }
 }
 #else
-static void parse_escape_sequence(const char* buf, int len, int& i) {
+static bool parse_escape_sequence(const std::string& buf, size_t& i) {
     App& a = app();
-    if (i + 1 >= len || buf[i] != 27 || buf[i + 1] != '[') {
+    if (i + 1 >= buf.size()) return false;
+    if (buf[i] != 27 || buf[i + 1] != '[') {
         a.in.escape = true;
-        return;
+        ++i;
+        return true;
     }
     i += 2;
-    if (i < len && buf[i] == 'Z') {
+    if (i >= buf.size()) return false;
+    if (buf[i] == 'Z') {
         a.in.shift_tab = true;
-        return;
+        ++i;
+        return true;
     }
-    if (i < len && buf[i] == '<') {
+    if (buf[i] == '<') {
+        size_t start = i - 2;
         ++i;
         int b = 0, x = 0, y = 0;
-        while (i < len && std::isdigit((unsigned char)buf[i])) b = b * 10 + (buf[i++] - '0');
-        if (i < len && buf[i] == ';') ++i;
-        while (i < len && std::isdigit((unsigned char)buf[i])) x = x * 10 + (buf[i++] - '0');
-        if (i < len && buf[i] == ';') ++i;
-        while (i < len && std::isdigit((unsigned char)buf[i])) y = y * 10 + (buf[i++] - '0');
-        if (i < len && (buf[i] == 'M' || buf[i] == 'm')) {
+        while (i < buf.size() && std::isdigit((unsigned char)buf[i])) b = b * 10 + (buf[i++] - '0');
+        if (i >= buf.size()) { i = start; return false; }
+        if (buf[i] != ';') { i = start + 1; a.in.escape = true; return true; }
+        ++i;
+        while (i < buf.size() && std::isdigit((unsigned char)buf[i])) x = x * 10 + (buf[i++] - '0');
+        if (i >= buf.size()) { i = start; return false; }
+        if (buf[i] != ';') { i = start + 1; a.in.escape = true; return true; }
+        ++i;
+        while (i < buf.size() && std::isdigit((unsigned char)buf[i])) y = y * 10 + (buf[i++] - '0');
+        if (i >= buf.size()) { i = start; return false; }
+        if (buf[i] == 'M' || buf[i] == 'm') {
             a.in.mouse_x = x - 1;
             a.in.mouse_y = y - 1;
+            a.in.mouse_event = true;
             if (b == 64) a.in.wheel = -1;
             else if (b == 65) a.in.wheel = 1;
+            else if (b == 66) a.in.wheel = -1;
+            else if (b == 67) a.in.wheel = 1;
             else if ((b & 32) != 0) {
                 // Hover/motion report.
             } else if (buf[i] == 'M') a.in.mouse_pressed = true;
             else a.in.mouse_released = true;
+            ++i;
+            return true;
         }
-        return;
+        i = start + 1;
+        a.in.escape = true;
+        return true;
     }
     char final = 0;
-    while (i < len) {
+    size_t start = i - 2;
+    while (i < buf.size()) {
         char ch = buf[i];
         if ((ch >= 'A' && ch <= 'Z') || ch == '~') {
             final = ch;
@@ -748,10 +825,13 @@ static void parse_escape_sequence(const char* buf, int len, int& i) {
         }
         ++i;
     }
+    if (!final) { i = start; return false; }
     if (final == 'A') a.in.up = true;
     else if (final == 'B') a.in.down = true;
     else if (final == 'C') a.in.right = true;
     else if (final == 'D') a.in.left = true;
+    ++i;
+    return true;
 }
 
 static void read_input() {
@@ -760,17 +840,31 @@ static void read_input() {
     for (;;) {
         int n = (int)::read(STDIN_FILENO, buf, sizeof(buf));
         if (n <= 0) break;
-        for (int i = 0; i < n; ++i) {
-            unsigned char c = (unsigned char)buf[i];
-            if (c == 27) parse_escape_sequence(buf, n, i);
-            else if (c == 17) a.in.ctrl_q = true;
+        a.input_pending.append(buf, (size_t)n);
+    }
+    size_t i = 0;
+    while (i < a.input_pending.size()) {
+        unsigned char c = (unsigned char)a.input_pending[i];
+        if (c == 27) {
+            size_t before = i;
+            if (!parse_escape_sequence(a.input_pending, i)) {
+                a.input_pending.erase(0, before);
+                return;
+            }
+        } else {
+            ++i;
+            if (c == 17) a.in.ctrl_q = true;
             else if (c == 9) a.in.tab = true;
             else if (c == 10 || c == 13) a.in.enter = true;
             else if (c == 127 || c == 8) a.in.backspace = true;
-            else if (c == ' ') a.in.space = true;
+            else if (c == ' ') {
+                a.in.space = true;
+                push_text_char(' ');
+            }
             else if (c >= 32 && c < 127) push_text_char((char)c);
         }
     }
+    a.input_pending.clear();
 }
 #endif
 
@@ -790,6 +884,30 @@ static std::string color_seq(Color fg, Color bg, bool bold) {
                   color_byte(bg.r), color_byte(bg.g), color_byte(bg.b));
     return buf;
 }
+
+static std::string base64_encode(std::string_view input) {
+    static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((input.size() + 2) / 3) * 4);
+    unsigned val = 0;
+    int valb = -6;
+    for (unsigned char c : input) {
+        val = (val << 8) | c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(table[(val >> valb) & 0x3f]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) out.push_back(table[((val << 8) >> (valb + 8)) & 0x3f]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
+struct ImageData {
+    std::string path;
+    unsigned id = 0;
+};
 
 static Color role_color(ColorRole role) {
     App& a = app();
@@ -1106,6 +1224,7 @@ void begin() {
     a.focus_order.clear();
     a.hovered = 0;
     a.pending_tooltip.clear();
+    a.graphics_commands.clear();
     a.cursor_x = 2;
     a.cursor_y = 2;
     a.content_x = 2;
@@ -1153,6 +1272,7 @@ void end() {
         if (y != a.height - 1) out += "\r\n";
     }
     out += "\x1b[0m";
+    for (const std::string& cmd : a.graphics_commands) out += cmd;
     write_raw(out);
 }
 
@@ -1278,7 +1398,9 @@ static bool button_impl(const char* label, bool has_color, Color custom_color) {
     animate_to(m.active, (focused || mouse_hit) ? 1.0f : 0.0f);
     Color base = has_color ? custom_color : consume_role_color(ColorRole::Button);
     Color active = has_color ? lerp(custom_color, a.style.text, 0.22f) : role_color(ColorRole::ButtonActive);
-    Color bg = lerp(base, active, std::max(m.focus, m.active) * 0.65f);
+    float lit = std::max({m.focus, m.active, m.hover * 0.7f});
+    Color hover_base = has_color ? lerp(base, a.style.text, 0.12f) : role_color(ColorRole::ButtonHover);
+    Color bg = lerp(lerp(base, hover_base, m.hover), active, lit * 0.65f);
     Color border = lerp(role_color(ColorRole::Border), role_color(ColorRole::Accent), m.focus);
     draw_box(r, border, bg);
     std::string face = " " + name + " ";
@@ -1338,8 +1460,8 @@ bool input(const char* label, char* buffer, int buffer_size, InputFlags flags, b
     }
     Motion& m = motion(id);
     animate_to(m.focus, focused ? 1.0f : 0.0f);
-    Color border = lerp(a.style.border, a.style.input_focus, m.focus);
-    Color bg = lerp(a.style.input_bg, a.style.panel_alt, m.focus * 0.45f);
+    Color border = lerp(a.style.border, a.style.input_focus, std::max(m.focus, m.hover * 0.55f));
+    Color bg = lerp(a.style.input_bg, a.style.panel_alt, std::max(m.focus * 0.45f, m.hover * 0.28f));
     draw_box(r, border, bg);
     std::string visible;
     if (flags & InputFlags::Password) visible.assign(std::strlen(buffer), '*');
@@ -1384,6 +1506,7 @@ bool text_area_ex(const char* label, char* buffer, int buffer_size, int rows, Te
     draw_text(a.content_x, a.cursor_y, name, a.style.text_dim, a.style.background, false, a.content_w);
     Rect r{a.content_x, a.cursor_y + 1, consume_width(a.content_w), rows + 2};
     bool focused = register_focus(id, r);
+    bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
     bool changed = false;
     if (focused && !disabled() && !(flags & TextAreaFlags::ReadOnly)) {
         int len = (int)std::strlen(buffer);
@@ -1406,11 +1529,18 @@ bool text_area_ex(const char* label, char* buffer, int buffer_size, int rows, Te
         }
     }
     Motion& m = motion(id);
-    Color border = lerp(a.style.border, a.style.input_focus, m.focus);
-    Color bg = lerp(a.style.input_bg, a.style.panel_alt, m.focus * 0.35f);
+    Color border = lerp(a.style.border, a.style.input_focus, std::max(m.focus, m.hover * 0.55f));
+    Color bg = lerp(a.style.input_bg, a.style.panel_alt, std::max(m.focus * 0.35f, m.hover * 0.22f));
     draw_box(r, border, bg);
     std::vector<std::string> lines = split_lines_simple(buffer);
-    int first = std::max(0, (int)lines.size() - rows);
+    ScrollState& ss = scroll_state(id);
+    int max_scroll = std::max(0, (int)lines.size() - rows);
+    if (hit && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
+    if (focused && a.in.up) ss.target -= 1.0f;
+    if (focused && a.in.down) ss.target += 1.0f;
+    ss.target = clamp_f(ss.target, 0.0f, (float)max_scroll);
+    ease_to(ss.current, ss.target, 0.22f);
+    int first = clamp_i((int)std::round(ss.current), 0, max_scroll);
     int max_w = std::max(1, r.w - 4);
     for (int i = 0; i < rows && first + i < (int)lines.size(); ++i) {
         std::string line = lines[(size_t)(first + i)];
@@ -1435,11 +1565,12 @@ void log_view(const char* label, const char* text_value, int rows, LogViewFlags 
     ScrollState& ss = scroll_state(id);
     int max_scroll = std::max(0, (int)lines.size() - rows);
     if (flags & LogViewFlags::AutoScrollBottom) ss.target = (float)max_scroll;
-    if (focused && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
+    bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
+    if ((focused || hit) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 3.0f;
     if (focused && a.in.up) ss.target -= 1.0f;
     if (focused && a.in.down) ss.target += 1.0f;
     ss.target = clamp_f(ss.target, 0.0f, (float)max_scroll);
-    animate_to(ss.current, ss.target);
+    ease_to(ss.current, ss.target, 0.22f);
     int first = clamp_i((int)std::round(ss.current), 0, max_scroll);
     Color bg = a.style.panel;
     draw_box(r, a.style.border, bg);
@@ -1485,6 +1616,7 @@ bool slider_float(const char* label, float* value, float min_v, float max_v) {
     unsigned id = hash_label(label);
     Rect r{a.content_x, a.cursor_y, consume_width(a.content_w), 2};
     bool focused = register_focus(id, r);
+    bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
     float old = *value;
     if (!disabled() && focused) {
         float step = (max_v - min_v) / 100.0f;
@@ -1492,17 +1624,24 @@ bool slider_float(const char* label, float* value, float min_v, float max_v) {
         if (a.in.left) *value -= step;
         if (a.in.right) *value += step;
     }
+    int bar_w = std::max(8, r.w - (int)name.size() - 12);
+    int bx = r.x + (int)name.size() + 2;
+    if (!disabled() && hit && (a.in.mouse_pressed || a.in.mouse_released || a.in.mouse_event)) {
+        a.focused = (int)id;
+        float t_mouse = bar_w <= 1 ? 0.0f : (float)(a.in.mouse_x - bx) / (float)(bar_w - 1);
+        *value = min_v + clamp_f(t_mouse, 0.0f, 1.0f) * (max_v - min_v);
+    }
     *value = clamp_f(*value, min_v, max_v);
     bool changed = std::abs(*value - old) > 0.0001f;
     float t = max_v == min_v ? 0.0f : (*value - min_v) / (max_v - min_v);
-    int bar_w = std::max(8, r.w - (int)name.size() - 12);
     int fill = clamp_i((int)std::round(t * bar_w), 0, bar_w);
     char val[32];
     std::snprintf(val, sizeof(val), " %.2f", *value);
-    draw_text(r.x, r.y, name, a.style.text_dim, a.style.background, false, r.w);
-    int bx = r.x + (int)name.size() + 2;
+    Color label_color = hit ? a.style.text : a.style.text_dim;
+    draw_text(r.x, r.y, name, label_color, a.style.background, focused || hit, r.w);
     for (int i = 0; i < bar_w; ++i) {
-        put(bx + i, r.y, i < fill ? '=' : '-', i < fill ? a.style.accent : a.style.border, a.style.background, focused);
+        Color rail = hit ? lerp(a.style.border, a.style.accent, 0.35f) : a.style.border;
+        put(bx + i, r.y, i < fill ? '=' : '-', i < fill ? a.style.accent : rail, a.style.background, focused || hit);
     }
     draw_text(bx + bar_w + 1, r.y, val, a.style.text, a.style.background, false, r.w - bar_w - 1);
     a.cursor_y += 2;
@@ -1519,6 +1658,9 @@ bool tabs(const char* const* labels, int count, int* selected) {
     id ^= (unsigned)(a.cursor_x * 131 + a.cursor_y * 313);
     Rect r{a.content_x, a.cursor_y, a.content_w, 3};
     bool focused = register_focus(id, r);
+    TabState& ts = tab_state(id, *selected);
+    ts.target = (float)*selected;
+    ease_to(ts.current, ts.target, 0.24f);
     bool changed = false;
     if (!disabled() && focused && a.in.left && *selected > 0) {
         --*selected;
@@ -1534,25 +1676,44 @@ bool tabs(const char* const* labels, int count, int* selected) {
     }
 
     int x = r.x;
+    int active_x = r.x;
+    int active_w = 0;
+    int prev_x = r.x;
+    int prev_w = 0;
     for (int i = 0; i < count; ++i) {
         std::string name = visible_label(labels[i]);
         int w = (int)name.size() + 4;
+        if (i <= (int)std::floor(ts.current)) {
+            prev_x = x;
+            prev_w = w;
+        }
+        if (i == *selected) {
+            active_x = x;
+            active_w = w;
+        }
         Rect tr{x, r.y, w, 3};
         bool hit = contains(tr, a.in.mouse_x, a.in.mouse_y);
-        if (!disabled() && hit && a.in.mouse_released && *selected != i) {
+        if (!disabled() && hit && (a.in.mouse_pressed || a.in.mouse_released) && *selected != i) {
             *selected = i;
             changed = true;
             a.focused = (int)id;
         }
         bool active = i == *selected;
-        Color bg = active ? a.style.panel_alt : a.style.background;
-        Color fg = active ? a.style.text : a.style.text_dim;
+        Color bg = active ? a.style.panel_alt : (hit ? a.style.button_hover : a.style.background);
+        Color fg = active || hit ? a.style.text : a.style.text_dim;
         fill_rect(tr, bg);
         draw_text(x + 2, r.y + 1, name, fg, bg, active, w - 4);
-        if (active) draw_hline(x + 1, r.y + 2, w - 2, '=', a.style.accent, bg);
         x += w + 1;
         if (x >= r.x + r.w) break;
     }
+    float frac = ts.current - std::floor(ts.current);
+    int underline_x = active_x;
+    int underline_w = active_w;
+    if (active_w > 0 && prev_w > 0 && std::abs(ts.current - ts.target) > 0.01f) {
+        underline_x = (int)std::round(prev_x + (active_x - prev_x) * frac);
+        underline_w = (int)std::round(prev_w + (active_w - prev_w) * frac);
+    }
+    if (underline_w > 2) draw_hline(underline_x + 1, r.y + 2, underline_w - 2, '=', a.style.accent, a.style.background);
     if (focused) put(r.x, r.y + 1, '>', a.style.accent, a.style.background, true);
     a.cursor_y += 4;
     return changed;
@@ -1777,9 +1938,10 @@ void scroll_area(const char* label, float height, std::function<void()> fn) {
     Rect r{a.content_x, a.cursor_y, a.content_w, std::min(rows, std::max(1, a.height - a.cursor_y - 1))};
     bool focused = register_focus(id, r);
     ScrollState& ss = scroll_state(id);
-    if (focused && a.in.wheel != 0) ss.target += (float)a.in.wheel * 2.0f;
+    bool hit = contains(r, a.in.mouse_x, a.in.mouse_y);
+    if ((focused || hit) && a.in.wheel != 0) ss.target += (float)a.in.wheel * 2.0f;
     ss.target = std::max(0.0f, ss.target);
-    animate_to(ss.current, ss.target);
+    ease_to(ss.current, ss.target, 0.20f);
     draw_box({r.x, r.y, r.w, r.h}, focused ? a.style.accent : a.style.border, a.style.panel);
     int old_x = a.content_x;
     int old_y = a.cursor_y;
@@ -1942,18 +2104,46 @@ void progress_bar(float progress, const ProgressStyle& style) {
 }
 
 void image(ImageHandle* img, float width, float height) {
-    (void)img;
-    set_next_width(width);
-    progress_bar(0.0f, ProgressStyle{"[image unsupported in terminal]", nullptr, ColorRole::TextDim, {-1.0f, -1.0f, -1.0f, -1.0f}, height, false, false, false});
+    using namespace detail;
+    App& a = app();
+    int cols = std::max(4, (int)std::round(width));
+    int rows = std::max(2, (int)std::round(height));
+    if (width > 80.0f) cols = std::max(4, (int)std::round(width / 8.0f));
+    if (height > 24.0f) rows = std::max(2, (int)std::round(height / 16.0f));
+    cols = std::min(cols, a.content_w);
+    rows = std::min(rows, std::max(2, a.height - a.cursor_y - 1));
+    Rect r{a.content_x, a.cursor_y, cols, rows};
+    draw_box(r, a.style.border, a.style.panel);
+
+    ImageData* data = img ? static_cast<ImageData*>(img->_impl) : nullptr;
+    if (data && !data->path.empty()) {
+        std::string payload = base64_encode(data->path);
+        char prefix[160];
+        std::snprintf(prefix, sizeof(prefix),
+                      "\x1b[%d;%dH\x1b_Ga=T,f=100,t=f,q=2,i=%u,c=%d,r=%d;",
+                      r.y + 1, r.x + 1, data->id, cols, rows);
+        a.graphics_commands.push_back(std::string(prefix) + payload + "\x1b\\");
+    } else {
+        draw_text(r.x + 2, r.y + rows / 2, "[image]", a.style.text_dim, a.style.panel, false, r.w - 4);
+    }
+    a.cursor_y += rows + 1;
 }
 
 ImageHandle* load_image(const char* utf8_path) {
-    (void)utf8_path;
-    return nullptr;
+    if (!utf8_path || !*utf8_path) return nullptr;
+    static unsigned next_id = 1000;
+    ImageHandle* h = new ImageHandle;
+    detail::ImageData* data = new detail::ImageData;
+    data->path = utf8_path;
+    data->id = next_id++;
+    h->_impl = data;
+    return h;
 }
 
 void free_image(ImageHandle* img) {
-    (void)img;
+    if (!img) return;
+    delete static_cast<detail::ImageData*>(img->_impl);
+    delete img;
 }
 
 std::string open_file_dialog(const char* title, const FileFilter* filters, int filter_count) {
