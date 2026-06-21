@@ -64,6 +64,12 @@ Windows with MSVC:
 cl /std:c++17 demo.cpp
 ```
 
+Windows with `clang++`:
+
+```bash
+clang++ demo.cpp -std=c++17 -o demo.exe
+```
+
 ## Compatibility With FTUI Syntax
 
 New code should include `ftti.hpp` and use `ftti::`:
