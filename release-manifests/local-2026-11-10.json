@@ -1,0 +1,36 @@
+{
+  "snapshot": "2026-11-10",
+  "project": "ftti",
+  "status": "prerelease local-work snapshot",
+  "artifacts": [
+    {
+      "path": "build-release/compat_ftui",
+      "size": 269808,
+      "sha256": "1937654d32d37895bc7e34645589dd433614954e15448c648d559bfa7ae5a2cf"
+    },
+    {
+      "path": "build-release/demo",
+      "size": 127048,
+      "sha256": "6a576678f27472db6271f3c904319ce7bdd30512f5acdf9573a8d2f0bea9b0bc"
+    },
+    {
+      "path": "build-release/minimal",
+      "size": 126976,
+      "sha256": "dfbbf98c40ec407beb93e3e7b354602825be01501590bad3b3435df5ea1114ab"
+    },
+    {
+      "path": "build-release/showcase",
+      "size": 132080,
+      "sha256": "c2e3e66098fa60f1c1b022dfbc62efc2f04163e7856c5b035dba71cf8b16c38b"
+    }
+  ],
+  "checks": [
+    {
+      "job": "ftti",
+      "passed": true,
+      "command": "make BUILD_DIR=build-release CXXFLAGS=\"-std=c++17 -O2 -DNDEBUG\" -j2"
+    }
+  ],
+  "notes": [],
+  "runtime": "Linux x86_64 dynamic system libraries for ELF binaries; .exe cross-compiled Windows x64; APK preview/debug; OXT platform independent. Source/API compatibility and hardware behavior are not implied by compilation."
+}
